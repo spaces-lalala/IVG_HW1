@@ -44,7 +44,13 @@ class BaseScheduler(nn.Module):
             #       beta_t = 1 - alphā_t / alphā_{t-1}
             # 3. Clip beta_t to at most 0.999 (singularity at t = T).
             # 4. Return betas as a tensor of shape [num_train_timesteps].
-            raise NotImplementedError("TODO: Implement cosine beta schedule here!")
+            s = 0.008
+            t_over_T  = torch.linspace(0, 1, steps=num_train_timesteps+1) 
+            alphā_t = torch.cos( ( (t_over_T + s) / (1+s) ) * (np.pi/2) ) ** 2
+            betas = 1 - alphā_t[1:] / alphā_t[:-1]
+            betas = betas.clamp(max=0.999)
+            
+            # raise NotImplementedError("TODO: Implement cosine beta schedule here!")
                
         else:
             raise NotImplementedError(f"{mode} is not implemented.")
@@ -139,7 +145,18 @@ class DDPMScheduler(BaseScheduler):
         # 4. Compute the posterior variance \tilde{β}_t = ((1-ᾱ_{t-1})/(1-ᾱ_t)) * β_t.
         # 5. Add Gaussian noise scaled by √(\tilde{β}_t) unless t == 0.
         # 6. Return the final sample at t-1.
-        sample_prev = None
+        beta_t = extract(self.betas, t, x_t)
+        alpha_t = extract(self.alphas, t, x_t)
+        alpha_bar_t = extract(self.alphas_cumprod, t, x_t)
+        alpha_bar_prev_table = torch.cat([torch.ones(1, device=self.alphas_cumprod.device), self.alphas_cumprod[ :-1 ] ])
+        alpha_bar_prev       = extract(alpha_bar_prev_table, t, x_t)
+        x_hat_0 = (x_t - (1-alpha_bar_t).sqrt() * eps_theta) / alpha_bar_t.sqrt()
+        x_hat_0 = torch.clamp(x_hat_0, -1, 1)
+        mu_tilde_t = (alpha_bar_prev.sqrt() * beta_t / (1-alpha_bar_t)) * x_hat_0 + (alpha_t.sqrt() * (1-alpha_bar_prev) / (1-alpha_bar_t)) * x_t
+        beta_tilde_t = ((1-alpha_bar_prev) / (1-alpha_bar_t)) * beta_t
+        sample_prev = mu_tilde_t
+        if t > 0:
+            sample_prev = mu_tilde_t + beta_tilde_t.sqrt() * torch.randn_like(x_t)
         #######################
         return sample_prev
 
@@ -157,8 +174,17 @@ class DDPMScheduler(BaseScheduler):
         """
         ######## TODO ########
         # Remember to clamp x0_pred to [-1, 1], as in step_predict_noise.
-
-        sample_prev = None
+        beta_t = extract(self.betas, t, x_t)
+        alpha_t = extract(self.alphas, t, x_t)
+        alpha_bar_t = extract(self.alphas_cumprod, t, x_t)
+        alpha_bar_prev_table = torch.cat([torch.ones(1, device=self.alphas_cumprod.device), self.alphas_cumprod[ :-1 ] ])
+        alpha_bar_prev       = extract(alpha_bar_prev_table, t, x_t)
+        x_hat_0 = torch.clamp(x0_pred, -1, 1)
+        mu_tilde_t = (alpha_bar_prev.sqrt() * beta_t / (1-alpha_bar_t)) * x_hat_0 + (alpha_t.sqrt() * (1-alpha_bar_prev) / (1-alpha_bar_t)) * x_t
+        beta_tilde_t = ((1-alpha_bar_prev) / (1-alpha_bar_t)) * beta_t
+        sample_prev = mu_tilde_t
+        if t > 0:
+            sample_prev = mu_tilde_t + beta_tilde_t.sqrt() * torch.randn_like(x_t)
         #######################
         return sample_prev
 
@@ -175,8 +201,14 @@ class DDPMScheduler(BaseScheduler):
             sample_prev: denoised image sample at timestep t-1
         """
         ######## TODO ########
-
-        sample_prev = None
+        beta_t = extract(self.betas, t, x_t)
+        alpha_bar_t = extract(self.alphas_cumprod, t, x_t)
+        alpha_bar_prev_table = torch.cat([torch.ones(1, device=self.alphas_cumprod.device), self.alphas_cumprod[ :-1 ] ])
+        alpha_bar_prev       = extract(alpha_bar_prev_table, t, x_t)
+        beta_tilde_t = ((1-alpha_bar_prev) / (1-alpha_bar_t)) * beta_t
+        sample_prev = mean_theta
+        if t > 0:
+            sample_prev = mean_theta + beta_tilde_t.sqrt() * torch.randn_like(x_t)
         #######################
         return sample_prev
 
@@ -211,7 +243,8 @@ class DDPMScheduler(BaseScheduler):
         ######## TODO ########
         # DO NOT change the code outside this part.
         # Assignment 1. Implement the DDPM forward step.
-        x_t = None
+        alphas_prod_t = extract(self.alphas_cumprod, t, x_0)
+        x_t = alphas_prod_t.sqrt()*x_0 + (1-alphas_prod_t).sqrt() * eps
         #######################
 
         return x_t, eps

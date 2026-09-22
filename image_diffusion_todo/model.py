@@ -28,8 +28,12 @@ class DiffusionModule(nn.Module):
         # 1. Sample a timestep and add noise to get (x_t, noise).
         # 2. Pass (x_t, timestep) into self.network, where the output should represent the clean sample x0_pred.
         # 3. Compute the loss as MSE(predicted x0_pred, ground-truth x0).
+        B = x0.shape[0]
+        t = self.var_scheduler.uniform_sample_t(B, x0.device)  # (B,)
+        x_t, eps = self.var_scheduler.add_noise(x0, t, eps=noise)
+        x0_pred = self.network(x_t, t, class_label) if class_label is not None else self.network(x_t, t)
+        loss = F.mse_loss(x0_pred, x0)
         ######################
-        loss = None
         return loss
 
     def get_loss_mean(self, x0, class_label=None, noise=None):
@@ -39,8 +43,25 @@ class DiffusionModule(nn.Module):
         # 2. Pass (x_t, timestep) into self.network, where the output should represent the posterior mean μθ(x_t, t).
         # 3. Compute the *true* posterior mean from the closed-form DDPM formula (using x0, x_t, and scheduler terms).
         # 4. Compute the loss as MSE(predicted mean, true mean).
+        B = x0.shape[0]
+        t = self.var_scheduler.uniform_sample_t(B, x0.device)  # (B,)
+        x_t, eps = self.var_scheduler.add_noise(x0, t, eps=noise)
+        mean_pred = self.network(x_t, t, class_label) if class_label is not None else self.network(x_t, t)
+        beta_t = extract(self.var_scheduler.betas,t, x_t)
+        alpha_t = extract(self.var_scheduler.alphas,t, x_t)
+        alpha_bar_t = extract(self.var_scheduler.alphas_cumprod, t, x_t)
+        alpha_bar_prev_table = torch.cat([
+            torch.ones(1, device=self.var_scheduler.alphas_cumprod.device),
+            self.var_scheduler.alphas_cumprod[:-1]
+        ])
+        alpha_bar_prev = extract(alpha_bar_prev_table, t, x_t)
+
+        mu_true = (alpha_bar_prev.sqrt() * beta_t / (1-alpha_bar_t)) * x0 + (alpha_t.sqrt() * (1-alpha_bar_prev) / (1-alpha_bar_t)) * x_t
+
+ 
+        loss = F.mse_loss(mean_pred, mu_true)
+        
         ######################
-        loss = None
         return loss
     
     def get_loss(self, x0, class_label=None, noise=None):
