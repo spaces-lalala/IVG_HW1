@@ -10,3 +10,5 @@ samples/
 .DS_Store
 Script.txt
 Slides.pdf
+.venv/
+HOWTO_lab1_zh.md
